@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import * as LucideIcons from 'lucide-react';
-import { executiveKPIs, executiveSummaryData } from '../mockData';
+import { executiveKPIs, executiveSummaryData, DEMO_MODE } from '../mockData';
 
 export function SummaryMetricCard({ icon: Icon, title, value, color }) {
   return (
@@ -16,26 +16,26 @@ export function SummaryMetricCard({ icon: Icon, title, value, color }) {
   );
 }
 
-export function ExecutiveSummary({ apiData, fileStats }) {
+export function ExecutiveSummary({ backendResult, fileStats }) {
   const scale = fileStats && fileStats.total > 0 ? (fileStats.total / 50) : 1;
   const mockClaims = Math.max(1, Math.floor(12450 * scale));
 
-  const data = apiData && apiData.metrics ? {
-    filesProcessed: apiData.filesProcessed,
-    claimsProcessed: apiData.metrics.num_claims || 0,
+  const data = backendResult && backendResult.metrics ? {
+    filesProcessed: backendResult.filesProcessed,
+    claimsProcessed: backendResult.metrics.num_claims || 0,
     validationPassRate: '98.2%', 
     extractionAccuracy: '99.5%',
     duplicateRate: '0.04%'
   } : {
-    filesProcessed: fileStats?.total || executiveSummaryData.filesProcessed,
-    claimsProcessed: mockClaims,
-    validationPassRate: '98.2%',
-    extractionAccuracy: '99.5%',
-    duplicateRate: '0.04%'
+    filesProcessed: fileStats?.total || (DEMO_MODE ? executiveSummaryData.filesProcessed : 'N/A'),
+    claimsProcessed: DEMO_MODE ? mockClaims : 'N/A',
+    validationPassRate: DEMO_MODE ? '98.2%' : 'N/A',
+    extractionAccuracy: DEMO_MODE ? '99.5%' : 'N/A',
+    duplicateRate: DEMO_MODE ? '0.04%' : 'N/A'
   };
 
   return (
-    <section className="glass-panel" style={{ padding: '24px', display: 'flex', justifyContent: 'space-around', alignItems: 'center', background: '#ffffff', borderLeft: '4px solid var(--accent-color)' }}>
+    <section className="glass-panel" style={{ padding: '24px', display: 'flex', justifyContent: 'space-around', alignItems: 'center', background: 'var(--bg-card)', borderLeft: '4px solid var(--accent-color)' }}>
       <div style={{ textAlign: 'center' }}>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: 600 }}>Files Processed</p>
         <h2 style={{ fontSize: '1.8rem', color: 'var(--text-main)' }}>{data.filesProcessed}</h2>
@@ -43,7 +43,7 @@ export function ExecutiveSummary({ apiData, fileStats }) {
       <div style={{ width: '1px', height: '40px', background: 'var(--border-color)' }} />
       <div style={{ textAlign: 'center' }}>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: 600 }}>Claims Processed</p>
-        <h2 style={{ fontSize: '1.8rem', color: 'var(--text-main)' }}>{data.claimsProcessed.toLocaleString()}</h2>
+        <h2 style={{ fontSize: '1.8rem', color: 'var(--text-main)' }}>{typeof data.claimsProcessed === 'number' ? data.claimsProcessed.toLocaleString() : data.claimsProcessed}</h2>
       </div>
       <div style={{ width: '1px', height: '40px', background: 'var(--border-color)' }} />
       <div style={{ textAlign: 'center' }}>
@@ -64,38 +64,64 @@ export function ExecutiveSummary({ apiData, fileStats }) {
   );
 }
 
-export function TopMetrics({ isProcessing, isComplete, apiData, fileStats }) {
+export function TopMetrics({ isProcessing, isComplete, backendResult, fileStats }) {
   const scale = fileStats && fileStats.total > 0 ? (fileStats.total / 50) : 1;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-        {executiveKPIs.map(kpi => {
-          const Icon = LucideIcons[kpi.icon];
-          let displayValue = "0";
+    <div style={{ display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap' }}>
+      {executiveKPIs.map(kpi => {
+        const Icon = LucideIcons[kpi.icon];
+        let displayValue = "0";
 
-          if (isProcessing && !isComplete) {
-            displayValue = "Running...";
-          } else if (isComplete) {
-            if (apiData) {
-              if (kpi.id === 'files') displayValue = apiData.filesProcessed;
-              else if (kpi.id === 'claims') displayValue = apiData.metrics?.num_claims || '0';
-              else displayValue = kpi.value; // Fallback for other real values if omitted
+        if (isProcessing && !isComplete) {
+          displayValue = "Running...";
+        } else if (isComplete) {
+          if (backendResult) {
+            if (kpi.id === 'files') {
+              displayValue = backendResult.filesUploaded;
+            } else if (kpi.id === 'valid') {
+              displayValue = backendResult.validLossRuns;
+            } else if (kpi.id === 'claims') {
+              displayValue = backendResult.claimsExtracted;
+            } else if (kpi.id === 'issues') {
+              displayValue = backendResult.validationIssues;
+            } else if (kpi.id === 'dupes') {
+              displayValue = backendResult.duplicatesFound;
+            } else if (kpi.id === 'time') {
+              displayValue = backendResult.processingTime || 'Not available';
+            } else if (kpi.id === 'confidence') {
+              displayValue = backendResult.aiConfidence || 'N/A';
             } else {
-              // Mock Scaling
+              displayValue = 'Not available';
+            }
+          } else {
+            // Mock Scaling if DEMO_MODE
+            if (DEMO_MODE) {
               if (kpi.id === 'files') displayValue = fileStats.total;
               else if (kpi.id === 'valid') displayValue = Math.max(0, fileStats.total - fileStats.rejected);
               else if (kpi.id === 'claims') displayValue = Math.max(1, Math.floor(12450 * scale)).toLocaleString();
               else if (kpi.id === 'dupes') displayValue = Math.max(0, Math.floor(5 * scale));
               else if (kpi.id === 'issues') displayValue = Math.max(0, Math.floor(12 * scale));
               else displayValue = kpi.value; // confidence, time
+            } else {
+              if (kpi.id === 'files') displayValue = fileStats.total;
+              else displayValue = 'Not available';
             }
           }
+        }
 
-          return <SummaryMetricCard key={kpi.id} icon={Icon} title={kpi.title} value={displayValue} color={kpi.color} />
-        })}
-      </div>
-      {(isProcessing || isComplete) && <ExecutiveSummary apiData={apiData} fileStats={fileStats} />}
+        return (
+          <div key={kpi.id} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ color: `rgb(${kpi.color})` }}>
+              <Icon size={16} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.5px' }}>{kpi.title}</span>
+              <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>{displayValue}</span>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -132,10 +158,7 @@ export function FileUploadPanel({ startProcessing, isProcessing, isComplete, fil
 
   const onLaunch = () => {
     if (selectedFiles.length === 0) {
-      // Launch Demo Simulation
-      const demoStats = { total: 12, pdf: 5, excel: 3, csv: 1, docx: 2, rejected: 1 };
-      setFileStats(demoStats);
-      startProcessing([], demoStats);
+      setErrorMsg("Please upload at least one valid file (PDF, DOCX, XLSX, CSV) to begin processing.");
       return;
     }
     if (fileStats.total === fileStats.rejected) {

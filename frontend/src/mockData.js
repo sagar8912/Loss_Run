@@ -1,3 +1,5 @@
+export const DEMO_MODE = false;
+
 export const initialAgents = [
   { id: 'intake', name: 'File Intake Agent', status: 'waiting', icon: 'FolderInput', input: '-', output: '-', time: '-', score: null, recordsProcessed: 0 },
   { id: 'detection', name: 'Loss Run Detection Agent', status: 'waiting', icon: 'ShieldCheck', input: '-', output: '-', time: '-', score: null, recordsProcessed: 0 },
@@ -24,41 +26,44 @@ export function generateSimulationSteps(stats) {
   const pdfChars = pdfPages * 2400;
   const excelTables = excelStreamFiles * 4;
   const excelKvBlocks = excelStreamFiles * 2;
-  const extractedClaims = validFiles > 0 ? validFiles * 22 : 0; 
+  const extractedClaims = DEMO_MODE ? (validFiles > 0 ? validFiles * 22 : 0) : 'Extracted'; 
+
+  const claimsOutputStr = DEMO_MODE ? `${extractedClaims} Claims` : 'Claims';
+  const confidenceScore = DEMO_MODE ? '98%' : 'Pending';
 
   return [
     { agent: 'intake', action: 'running', logs: [`Input Agent collected ${total} files from input folder.`] },
     { agent: 'intake', action: 'completed', input: `${total} files`, output: `${total} files`, time: '1.4s', score: '100%', recordsProcessed: total },
     
     { agent: 'detection', action: 'running', logs: ['Loss Run Detection Agent scanning files for identifiers...'] },
-    { agent: 'detection', action: 'completed', input: `${total} files`, output: `${validFiles} valid, ${rejected} rejected`, time: '2.2s', score: '98%', recordsProcessed: total, logs: [`Loss Run Detection Agent identified ${validFiles} valid loss run files.`] },
+    { agent: 'detection', action: 'completed', input: `${total} files`, output: `${validFiles} valid, ${rejected} rejected`, time: '2.2s', score: confidenceScore, recordsProcessed: total, logs: [`Loss Run Detection Agent identified ${validFiles} valid loss run files.`] },
     
     { agent: 'router', action: 'running', logs: ['Workflow Router analyzing file types...'] },
     { agent: 'router', action: 'completed', input: `${validFiles} files`, output: `${pdfStreamFiles} PDF/DOC, ${excelStreamFiles} Excel/CSV`, time: '0.5s', score: '100%', recordsProcessed: validFiles, logs: [`Workflow Router routed ${pdfStreamFiles} PDF/DOC files and ${excelStreamFiles} Excel/CSV files.`] },
 
-    { agent: 'docToPdf', action: 'running', logs: [`DOC/DOCX Converter processing ${docx} legacy documents...`] },
-    { agent: 'docToPdf', action: 'completed', input: `${docx} DOCX files`, output: `${docx} PDF files`, time: '1.2s', score: '100%', recordsProcessed: docx, logs: [`DOC/DOCX Converter converted ${docx} documents to PDF.`] },
+    { agent: 'docToPdf', action: 'running', logs: [`DOC/DOCX Converter processing legacy documents...`] },
+    { agent: 'docToPdf', action: 'completed', input: `${docx} DOCX files`, output: `${docx} PDF files`, time: '1.2s', score: '100%', recordsProcessed: docx, logs: [`DOC/DOCX Converter converted documents.`] },
 
     { agent: 'pdfToImage', action: 'running', logs: [`PDF to Image Agent converting pages...`] },
-    { agent: 'pdfToImage', action: 'completed', input: `${pdfStreamFiles} PDF files`, output: `${pdfPages} images`, time: '14.1s', score: '100%', recordsProcessed: pdfPages, logs: [`PDF To Image Agent generated ${pdfPages} images.`] },
+    { agent: 'pdfToImage', action: 'completed', input: `${pdfStreamFiles} PDF files`, output: DEMO_MODE ? `${pdfPages} images` : 'Images', time: '14.1s', score: '100%', recordsProcessed: pdfPages, logs: [`PDF To Image Agent generated images.`] },
 
     { agent: 'imageToText', action: 'running', logs: ['Image to Text Agent running OCR models...'] },
-    { agent: 'imageToText', action: 'completed', input: `${pdfPages} images`, output: `${pdfChars} chars`, time: '8.4s', score: '96%', recordsProcessed: pdfChars, logs: [`Image To Text Agent extracted ${pdfChars.toLocaleString()} characters.`] },
+    { agent: 'imageToText', action: 'completed', input: DEMO_MODE ? `${pdfPages} images` : 'Images', output: DEMO_MODE ? `${pdfChars} chars` : 'Text', time: '8.4s', score: confidenceScore, recordsProcessed: pdfChars, logs: [`Image To Text Agent extracted text.`] },
 
     { agent: 'excelBlock', action: 'running', logs: [`Excel Block Detection Agent scanning for tables and KV pairs...`] },
-    { agent: 'excelBlock', action: 'completed', input: `${excelStreamFiles} Excel files`, output: `${excelTables} tables`, time: '3.2s', score: '99%', recordsProcessed: excelTables, logs: [`Excel Block Detection Agent identified ${excelTables} blocks.`] },
+    { agent: 'excelBlock', action: 'completed', input: `${excelStreamFiles} Excel files`, output: DEMO_MODE ? `${excelTables} tables` : 'Tables', time: '3.2s', score: confidenceScore, recordsProcessed: excelTables, logs: [`Excel Block Detection Agent identified blocks.`] },
 
     { agent: 'excelText', action: 'running', logs: ['Excel Text Extraction Agent parsing block matrices...'] },
-    { agent: 'excelText', action: 'completed', input: `${excelTables} tables`, output: `Block JSON`, time: '2.1s', score: '98%', recordsProcessed: excelTables, logs: [`Excel Text Extraction Agent generated structured JSON.`] },
+    { agent: 'excelText', action: 'completed', input: DEMO_MODE ? `${excelTables} tables` : 'Tables', output: `Block JSON`, time: '2.1s', score: confidenceScore, recordsProcessed: excelTables, logs: [`Excel Text Extraction Agent generated structured JSON.`] },
 
     { agent: 'finalExtract', action: 'running', logs: ['Final Extraction Agent merging PDF and Excel output streams...'] },
-    { agent: 'finalExtract', action: 'completed', input: 'Combined Streams', output: `${extractedClaims} Claims`, time: '26.2s', score: '94%', recordsProcessed: extractedClaims, logs: [`Final Extraction Agent produced unified claims JSON.`] },
+    { agent: 'finalExtract', action: 'completed', input: 'Combined Streams', output: claimsOutputStr, time: '26.2s', score: confidenceScore, recordsProcessed: extractedClaims, logs: [`Final Extraction Agent produced unified claims JSON.`] },
 
     { agent: 'transform', action: 'running', logs: ['Transformation Agent applying business rule standardization...'] },
-    { agent: 'transform', action: 'completed', input: `${extractedClaims} Claims`, output: 'Normalized Data', time: '3.1s', score: '98%', recordsProcessed: extractedClaims, logs: [`Transformation Agent standardized all claim fields.`] },
+    { agent: 'transform', action: 'completed', input: claimsOutputStr, output: 'Normalized Data', time: '3.1s', score: confidenceScore, recordsProcessed: extractedClaims, logs: [`Transformation Agent standardized all claim fields.`] },
 
     { agent: 'validation', action: 'running', logs: ['Validation Agent checking mandatory fields and thresholds...'] },
-    { agent: 'validation', action: 'warning', input: `${extractedClaims} Claims`, output: `Issues detected`, time: '4.6s', score: '99%', recordsProcessed: extractedClaims, logs: [`Validation Agent detected 1 issue.`] },
+    { agent: 'validation', action: DEMO_MODE ? 'warning' : 'completed', input: claimsOutputStr, output: DEMO_MODE ? `Issues detected` : `Validated`, time: '4.6s', score: confidenceScore, recordsProcessed: extractedClaims, logs: [DEMO_MODE ? `Validation Agent detected 1 issue.` : 'Validation Agent finished.'] },
 
     { agent: 'rollup', action: 'running', logs: ['Rollup Agent aggregating line of business financials...'] },
     { agent: 'rollup', action: 'completed', input: 'Validated Claims', output: 'Business Summaries', time: '1.3s', score: '100%', recordsProcessed: extractedClaims, logs: [`Rollup Agent generated LOB summaries.`] },

@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 from docx_to_pdf import convert_docx_to_pdf
 from detect_loss_runs import detect_loss_runs
@@ -7,7 +8,9 @@ from determine_pdf_cutoff import determine_page_cutoffs
 from extract import extract_claims
 from clean_extraction_output import process_claims_df
 from detect_duplicates import detect_duplicate_claims_across_files
-from metrics import save_metrics_json
+from metrics import save_metrics_json, reset_metrics
+
+sys.stdout.reconfigure(encoding='utf-8')
 
 def prepare_excel_csv_files(input_data_dir, output_data_dir, company_names):
     """
@@ -39,6 +42,7 @@ def prepare_excel_csv_files(input_data_dir, output_data_dir, company_names):
                     print(f"Copied CSV: {file} to output_data")
 
 def main():
+    reset_metrics()
     input_data_dir = "input_data"
     output_data_dir = "output_data"
     extraction_data_dir = "extraction_output"

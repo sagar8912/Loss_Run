@@ -1,13 +1,18 @@
 import os
+import sys
 import shutil
 import json
 import csv
-from typing import List
+from typing import Annotated, List
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import traceback
 import main
+import pandas as pd
+from backend_analytics import generate_analytics_payload
+
+sys.stdout.reconfigure(encoding='utf-8')
 
 app = FastAPI()
 
@@ -27,8 +32,31 @@ OUTPUT_JSON = "extraction_output/sample_metrics.json"
 def health_check():
     return {"status": "ok"}
 
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    print(f"422 Error: {exc.errors()}")
+    print(f"Body: {exc.body}")
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
+from typing import Optional
+
 @app.post("/api/process-loss-run")
-def process_loss_run(files: List[UploadFile] = File(...)):
+async def process_loss_run(
+    files: Optional[List[UploadFile]] = File(None),
+    file: Optional[UploadFile] = File(None)
+):
+    upload_files = []
+    if files:
+        upload_files.extend(files)
+    if file:
+        upload_files.append(file)
+        
+    print("Received files:", [f.filename for f in upload_files])
+    
+    files = upload_files  # to maintain compatibility with the rest of the code
     # 1. Clear input_data/sample directory
     if os.path.exists(INPUT_DIR):
         shutil.rmtree(INPUT_DIR)
@@ -47,8 +75,17 @@ def process_loss_run(files: List[UploadFile] = File(...)):
         raise HTTPException(status_code=400, detail="No valid files uploaded.")
 
     try:
-        # 3. Trigger main pipeline
-        main.main()
+        # 3. Trigger main pipeline in a subprocess to avoid asyncio loop conflicts
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "main.py"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True,
+            text=True,
+            timeout=600
+        )
+        if result.returncode != 0:
+            raise Exception(f"Subprocess failed with code {result.returncode}\nStdout: {result.stdout}\nStderr: {result.stderr}")
     except Exception as e:
         err = traceback.format_exc()
         with open("error_traceback.log", "w", encoding="utf-8") as f:
@@ -59,32 +96,38 @@ def process_loss_run(files: List[UploadFile] = File(...)):
     if not os.path.exists(OUTPUT_CSV) or not os.path.exists(OUTPUT_JSON):
         raise HTTPException(status_code=500, detail="Processing completed but output files are missing.")
 
-    # 5. Parse preview data
-    claims_preview = []
+    # 5. Parse and aggregate via backend_analytics
     try:
-        with open(OUTPUT_CSV, mode="r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for i, row in enumerate(reader):
-                if i >= 100:  # Limit preview to 100 rows
-                    break
-                claims_preview.append(row)
+        df = pd.read_csv(OUTPUT_CSV)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read CSV output: {str(e)}")
+        df = pd.DataFrame()
+        print(f"Warning: Failed to read CSV for analytics: {e}")
 
     metrics = {}
     try:
         with open(OUTPUT_JSON, mode="r", encoding="utf-8") as f:
             metrics = json.load(f)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read JSON output: {str(e)}")
+        pass
+        
+    total_time = 0.0
+    if metrics and "sample" in metrics and "COMPANY_TOTAL" in metrics["sample"]:
+        total_time = metrics["sample"]["COMPANY_TOTAL"].get("time_seconds", 0.0)
 
-    return {
-        "status": "success",
-        "filesProcessed": saved_files,
-        "outputCsvPath": OUTPUT_CSV,
-        "metrics": metrics,
-        "claimsPreview": claims_preview
-    }
+    try:
+        payload = generate_analytics_payload(df, saved_files, total_time)
+        payload["status"] = "success"
+    except Exception as e:
+        err = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate analytics payload: {str(e)}\n{err}")
+
+    # Log to backend console
+    print("\n" + "="*50)
+    print("API RESPONSE")
+    print(json.dumps(payload, indent=2))
+    print("="*50 + "\n")
+
+    return payload
 
 @app.get("/api/download/csv")
 def download_csv():

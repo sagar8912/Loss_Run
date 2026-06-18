@@ -377,9 +377,9 @@ def _log_detection_decision(company: str, filename: str, info: dict):
     is_loss_run = bool(info.get("is_loss_run"))
     elapsed = _detection_time_usage.get((company, filename), 0.0)
     
-    emoji = "✅" if is_loss_run else "❌"
+    status_char = "PASS" if is_loss_run else "FAIL"
     print(f"        Company: {company}")
-    print(f"        {emoji} Loss Run Detection: {filename}")
+    print(f"        [{status_char}] Loss Run Detection: {filename}")
     print(f"        Filtering Time: {elapsed:.2f} seconds")
     usage = _detection_token_usage.get((company, filename), {"input": 0, "output": 0})
     
@@ -391,7 +391,7 @@ def _log_detection_decision(company: str, filename: str, info: dict):
         )
     else:
         cost = 0.0
-    print(f"                 💰 Filtering Cost: ${cost:.6f}")
+    print(f"                 [COST] Filtering Cost: ${cost:.6f}")
     
     record_stage(
         company,

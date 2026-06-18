@@ -142,6 +142,10 @@ def _print_if_changes(changed: int, msg: str) -> None:
 
 def process_claims_df(claims_df: pd.DataFrame) -> pd.DataFrame:
     df = claims_df.copy()
+    
+    rows_before = len(df)
+    print(f"[CLEANING] Rows before cleaning: {rows_before}")
+    
     # Log all claim numbers before cleaning
     claim_numbers_before = set()
     for col in ["claim_number", "claim_id"]:
@@ -149,16 +153,21 @@ def process_claims_df(claims_df: pd.DataFrame) -> pd.DataFrame:
             claim_numbers_before.update(df[col].dropna().astype(str).str.strip())
 
     # --- identify rows that are "empty" other than AccountName / file_path ---
-    # Only drop rows if both claim_id and claim_number are missing or empty
     def has_id(row):
         for col in ["claim_id", "claim_number"]:
             if col in row and str(row[col]).strip() not in ["", "nan", "None"]:
                 return True
         return False
+        
+    # Mark validation warnings instead of dropping
     mask_has_id = df.apply(has_id, axis=1)
-    df_empty = df[~mask_has_id].copy()   # rows with no ID at all
-    df_keep = df[mask_has_id].copy()    # keep rows with at least one ID
-    df = df_keep
+    if "validation_warnings" not in df.columns:
+        df["validation_warnings"] = ""
+        
+    missing_id_mask = ~mask_has_id
+    if missing_id_mask.any():
+        df.loc[missing_id_mask, "validation_warnings"] = df.loc[missing_id_mask, "validation_warnings"].astype(str) + "Missing Claim ID; "
+        print(f"[CLEANING] Warning: {missing_id_mask.sum()} rows are missing a valid claim ID, but they have been retained.")
 
     # --- Dates: "MM/DD/YYYY" as string ---
     date_cols = [
@@ -335,7 +344,10 @@ def process_claims_df(claims_df: pd.DataFrame) -> pd.DataFrame:
                 if n:
                     raw_lookup.setdefault(n, set()).add(str(raw).strip())
             missing_raw = sorted({item for n in missing_norm for item in raw_lookup.get(n, (n,))})
-            print(f"[CLEANING] Dropped claim numbers during cleaning: {missing_raw}")
+            print(f"[CLEANING] Dropped claim numbers during cleaning (IDs scrubbed, rows retained): {missing_raw}")
+
+    rows_after = len(df)
+    print(f"[CLEANING] Rows after cleaning: {rows_after} (Dropped: {rows_before - rows_after})")
 
     return df
 

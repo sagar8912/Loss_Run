@@ -12,6 +12,11 @@ from collections import defaultdict
 
 _metrics = defaultdict(lambda: defaultdict(dict))
 
+def reset_metrics():
+    """Clear the in-memory metrics store for a new upload/run."""
+    global _metrics
+    _metrics.clear()
+
 
 def record_stage(
     company: str,
@@ -62,10 +67,10 @@ def recompute_totals():
                 if stage_name == "TOTAL":
                     continue
 
-                total_time += float(vals.get("time_seconds", 0.0))
-                total_in += float(vals.get("input_tokens", 0))
-                total_out += float(vals.get("output_tokens", 0))
-                total_cost += float(vals.get("cost", 0.0))
+                total_time += float(vals.get("time_seconds", 0.0)) if isinstance(vals, dict) else 0.0
+                total_in += float(vals.get("input_tokens", 0)) if isinstance(vals, dict) else 0.0
+                total_out += float(vals.get("output_tokens", 0)) if isinstance(vals, dict) else 0.0
+                total_cost += float(vals.get("cost", 0.0)) if isinstance(vals, dict) else 0.0
 
             stages["TOTAL"] = {
                 "time_seconds": total_time,
