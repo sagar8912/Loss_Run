@@ -10,7 +10,17 @@ from fastapi.middleware.cors import CORSMiddleware
 import traceback
 import main
 import pandas as pd
-from backend_analytics import generate_analytics_payload
+import math
+from backend_analytics import generate_analytics_payload, generate_excel_report
+
+def replace_nan(obj):
+    if isinstance(obj, dict):
+        return {k: replace_nan(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [replace_nan(v) for v in obj]
+    elif isinstance(obj, float) and math.isnan(obj):
+        return None
+    return obj
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -27,6 +37,7 @@ app.add_middleware(
 INPUT_DIR = "input_data/sample"
 OUTPUT_CSV = "extraction_output/sample_claims.csv"
 OUTPUT_JSON = "extraction_output/sample_metrics.json"
+OUTPUT_EXCEL = "extraction_output/loss_run_output.xlsx"
 
 @app.get("/health")
 def health_check():
@@ -57,19 +68,37 @@ async def process_loss_run(
     print("Received files:", [f.filename for f in upload_files])
     
     files = upload_files  # to maintain compatibility with the rest of the code
-    # 1. Clear input_data/sample directory
-    if os.path.exists(INPUT_DIR):
-        shutil.rmtree(INPUT_DIR)
+    
+    print("Cleaning previous run folders")
+    for folder in ["input_data", "output_data", "extraction_output"]:
+        if os.path.exists(folder):
+            for filename in os.listdir(folder):
+                file_path = os.path.join(folder, filename)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception as e:
+                    pass
+        else:
+            os.makedirs(folder, exist_ok=True)
+            
     os.makedirs(INPUT_DIR, exist_ok=True)
     
     # 2. Save uploaded files
     saved_files = 0
+    filenames = []
     for file in files:
         if file.filename:
             file_path = os.path.join(INPUT_DIR, file.filename)
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             saved_files += 1
+            filenames.append(file.filename)
+
+    print("Saved uploaded files:", filenames)
+    print("Input folder after cleanup:", os.listdir(INPUT_DIR))
 
     if saved_files == 0:
         raise HTTPException(status_code=400, detail="No valid files uploaded.")
@@ -77,15 +106,32 @@ async def process_loss_run(
     try:
         # 3. Trigger main pipeline in a subprocess to avoid asyncio loop conflicts
         import subprocess
-        result = subprocess.run(
-            [sys.executable, "main.py"],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            capture_output=True,
-            text=True,
-            timeout=600
-        )
-        if result.returncode != 0:
-            raise Exception(f"Subprocess failed with code {result.returncode}\nStdout: {result.stdout}\nStderr: {result.stderr}")
+        print("STEP 2: Starting main.py subprocess")
+        try:
+            process = subprocess.Popen(
+                [sys.executable, "-u", "main.py"],
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1
+            )
+            
+            for line in process.stdout:
+                print("[MAIN]", line.rstrip(), flush=True)
+                
+            return_code = process.wait(timeout=600)
+            
+            print("STEP 3: main.py subprocess finished with code", return_code, flush=True)
+            
+            if return_code != 0:
+                raise Exception(f"Subprocess failed with code {return_code}")
+        except subprocess.TimeoutExpired:
+            print("STEP 3: main.py subprocess timed out")
+            process.kill()
+            raise Exception("main.py timed out after 600 seconds")
     except Exception as e:
         err = traceback.format_exc()
         with open("error_traceback.log", "w", encoding="utf-8") as f:
@@ -114,9 +160,28 @@ async def process_loss_run(
     if metrics and "sample" in metrics and "COMPANY_TOTAL" in metrics["sample"]:
         total_time = metrics["sample"]["COMPANY_TOTAL"].get("time_seconds", 0.0)
 
+    extraction_mode = "llm"
+    if not df.empty and "extractionMode" in df.columns:
+        modes = df["extractionMode"].dropna().unique()
+        if len(modes) > 0:
+            if "direct_pandas" in modes:
+                extraction_mode = "direct_pandas"
+            elif "pdf_text_fallback" in modes:
+                extraction_mode = "pdf_text_fallback"
+            elif "fallback_no_llm" in modes:
+                extraction_mode = "fallback_no_llm"
+                
+    if extraction_mode == "pdf_text_fallback":
+        print("[PDF FALLBACK] extractionMode propagated: pdf_text_fallback")
+
     try:
-        payload = generate_analytics_payload(df, saved_files, total_time)
+        payload = generate_analytics_payload(df, saved_files, total_time, extraction_mode)
+        
+        # Build the full multi-sheet Excel file
+        generate_excel_report(df, payload, metrics, OUTPUT_EXCEL)
+        
         payload["status"] = "success"
+        payload = replace_nan(payload)
     except Exception as e:
         err = traceback.format_exc()
         raise HTTPException(status_code=500, detail=f"Failed to generate analytics payload: {str(e)}\n{err}")
@@ -140,3 +205,11 @@ def download_json():
     if not os.path.exists(OUTPUT_JSON):
         raise HTTPException(status_code=404, detail="JSON not found")
     return FileResponse(OUTPUT_JSON, media_type="application/json", filename="sample_metrics.json")
+
+@app.get("/api/download/excel")
+def download_excel():
+    print("[DOWNLOAD] Excel requested", flush=True)
+    if not os.path.exists(OUTPUT_EXCEL):
+        raise HTTPException(status_code=404, detail="Master Excel output not found")
+    print(f"[DOWNLOAD] Returning: {OUTPUT_EXCEL}", flush=True)
+    return FileResponse(OUTPUT_EXCEL, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="loss_run_output.xlsx")

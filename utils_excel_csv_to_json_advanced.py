@@ -15,6 +15,12 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+DEMO_MODE = True
+FULL_EXTRACTION_MODE = True
+DEMO_MAX_ROWS = 20
+DEMO_CHUNK_ROWS = 5
+DEMO_PARALLEL_LLM = False
+
 def json_dumps_datetime(obj, **kwargs):
     """
     JSON dumps with support for datetime/date objects.
@@ -100,30 +106,29 @@ def clean_df_for_chunk(df: pd.DataFrame) -> dict:
     return data
 
 def _clean_df_for_chunk_sheet_level_excel(df: pd.DataFrame) -> dict:
-    """
-    Cleans a DataFrame for sheet-level chunking from Excel.
-    Keeps original dtypes (no string coercion) while normalizing headers and newlines.
-    """
-    df = df.copy()
-    df.columns = [
-        re.sub(r"^Unnamed: (\d+)$", r"Column \1", str(col))
-        for col in df.columns
-    ]
-    df = df.dropna(how="all")
+    print("[TRACE] ENTER _clean_df_for_chunk_sheet_level_excel", flush=True)
+    print(f"[TRACE] df.shape: {df.shape}", flush=True)
+    print(f"[TRACE] df.columns: {list(df.columns)}", flush=True)
     
-    df = df.map(
-        lambda x: re.sub(r"(\n\s*){2,}", "\n", str(x)) if pd.notnull(x) else x
-    )
+    print("[TRACE] Bypassing regex and normal cleaning", flush=True)
     
-    columns = list(df.columns)
-    data: Dict[str, Dict[str, Any]] = {}
-    for idx, row in enumerate(df.itertuples(index=False, name=None), start=1):
-        row_dict: Dict[str, Any] = {}
+    if FULL_EXTRACTION_MODE:
+        df_head = df
+    else:
+        # Bypass logic: just take first 5 rows for demo
+        df_head = df.head(5)
+    
+    data = {}
+    columns = list(df_head.columns)
+    for idx, row in enumerate(df_head.itertuples(index=False, name=None), start=1):
+        row_dict = {}
         for key, val in zip(columns, row):
             if not pd.isna(val):
-                row_dict[key] = val
+                row_dict[str(key)] = val
         if row_dict:
             data[f"row {idx}"] = row_dict
+            
+    print("[TRACE] EXIT _clean_df_for_chunk_sheet_level_excel", flush=True)
     return data
 
 # --- XLS Shim -----------------------------------------------------
@@ -750,8 +755,7 @@ def _sheet_layout_profile(ws: Worksheet) -> Dict[str, Any]:
     }
 
 # --- Chunking interface --------------------------------------------
-# Loads a CSV or Excel file and returns cleaned sheet-level chunks as dictionaries.
-def _sheet_level_chunks(file_path: Path) -> List[Dict[str, Any]]:
+def _sheet_level_chunks(file_path: Path, allow_raw_df: bool = True) -> List[Dict[str, Any]]:
     file_lower = file_path.name.lower()
     is_csv = file_lower.endswith(".csv")
     is_excel = file_lower.endswith((".xls", ".xlsx", ".xlsm", ".xlsb"))
@@ -759,15 +763,88 @@ def _sheet_level_chunks(file_path: Path) -> List[Dict[str, Any]]:
         raise ValueError(f"Unsupported file type for: {file_path}")
     chunks: List[Dict[str, Any]] = []
     if is_csv:
-        df = pd.read_csv(file_path)
+        print(f"[CHUNKING] Reading CSV {file_path}", flush=True)
+        df = pd.read_csv(file_path, nrows=500) # LIMIT FOR DEMO
         cleaned = clean_df_for_chunk(df)
         chunks.append({"source_type": "csv", "sheet_name": None, "content": cleaned})
         return chunks
+    print(f"[CHUNKING] Opening Excel file {file_path}", flush=True)
     excel_file = pd.ExcelFile(file_path)
     try:
-        for sheet_name in excel_file.sheet_names:
-            df = pd.read_excel(excel_file, sheet_name=sheet_name)
+        print("[DEMO MODE] Enabled", flush=True)
+        print(f"[DEBUG] Available sheets: {excel_file.sheet_names}", flush=True)
+        
+        selected_sheets = []
+        for s in excel_file.sheet_names:
+            if s.lower() == "raw":
+                selected_sheets.append(s)
+                break
+                
+        if not selected_sheets:
+            fallback_keywords = ["gl", "wc", "al", "auto", "property", "loss", "claims", "detail"]
+            for s in excel_file.sheet_names:
+                s_lower = s.lower()
+                if s_lower.startswith("rollup") or "comment" in s_lower:
+                    continue
+                if s in ["Final", "Sheet10", "Sheet8", "Sheet6", "Sheet4", "Resrve-Checks"]:
+                    continue
+                if any(kw in s_lower for kw in fallback_keywords):
+                    selected_sheets.append(s)
+                    
+        if not selected_sheets:
+            sheet_names_lower = {s.lower(): s for s in excel_file.sheet_names}
+            
+            if FULL_EXTRACTION_MODE:
+                # Prefer Final -> Rollup #3 -> Raw -> GL/Loss Run/Claims
+                for target in ["final", "rollup #3", "raw"]:
+                    if target in sheet_names_lower:
+                        selected_sheets.append(sheet_names_lower[target])
+                        break
+                
+                if not selected_sheets:
+                    for s_lower, s_orig in sheet_names_lower.items():
+                        if any(x in s_lower for x in ["gl", "loss", "claim"]):
+                            selected_sheets.append(s_orig)
+                            break
+
+            # Fallback if still none
+            if not selected_sheets:
+                for s in excel_file.sheet_names:
+                    s_lower = s.lower()
+                    if s_lower.startswith("rollup") or "comment" in s_lower:
+                        continue
+                    if s in ["Final", "Sheet10", "Sheet8", "Sheet6", "Sheet4", "Resrve-Checks"]:
+                        continue
+                    selected_sheets.append(s)
+                    break # Just pick one
+                
+        print(f"[DEMO MODE] Sheets selected for processing: {selected_sheets}", flush=True)
+
+        for sheet_name in selected_sheets:
+            print(f"[CHUNKING] Reading sheet: {sheet_name}", flush=True)
+            print(f"[TRACE] ENTER pd.read_excel for {sheet_name}", flush=True)
+            if not allow_raw_df:
+                print(f"[DETECTION PHASE] Limiting rows to 20 for detection", flush=True)
+                df = pd.read_excel(excel_file, sheet_name=sheet_name, nrows=20)
+            elif FULL_EXTRACTION_MODE:
+                df = pd.read_excel(excel_file, sheet_name=sheet_name)
+            elif DEMO_MODE:
+                print(f"[DEMO MODE] Raw sheet row limit applied: {DEMO_MAX_ROWS} rows", flush=True)
+                df = pd.read_excel(excel_file, sheet_name=sheet_name, nrows=DEMO_MAX_ROWS)
+            else:
+                df = pd.read_excel(excel_file, sheet_name=sheet_name, nrows=500) # Fallback limit
+            print(f"[TRACE] EXIT pd.read_excel for {sheet_name}", flush=True)
+            
+            if allow_raw_df and FULL_EXTRACTION_MODE and len(df) > 100:
+                print(f"[DIRECT PANDAS] Enabled", flush=True)
+                print(f"[DIRECT PANDAS] Sheet selected: {sheet_name}", flush=True)
+                print(f"[DIRECT PANDAS] Rows loaded: {len(df)}", flush=True)
+                chunks.append({"source_type": "excel", "sheet_name": sheet_name, "raw_df": df})
+                continue
+                
+            print(f"[TRACE] ENTER _clean_df_for_chunk_sheet_level_excel", flush=True)
             cleaned = _clean_df_for_chunk_sheet_level_excel(df)
+            print(f"[TRACE] EXIT _clean_df_for_chunk_sheet_level_excel", flush=True)
             chunks.append({"source_type": "excel", "sheet_name": sheet_name, "content": cleaned})
     finally:
         excel_file.close()
@@ -984,6 +1061,46 @@ def _split_rows_by_token_budget(
         buckets.append({"source_type": source_type, "sheet_name": sheet_name, "content": current})
     return buckets
 
+def _split_rows_fixed_count(
+    rows_dict: Dict[str, Dict[str, Any]],
+    source_type: str,
+    sheet_name: str,
+    rows_per_chunk: int = 100
+) -> List[Dict[str, Any]]:
+    buckets = []
+    current = {}
+    count = 0
+    start_row = 1
+    
+    def _row_sort_key(key: str) -> Tuple[int, str]:
+        match = re.search(r"\b(\d+)\b", key)
+        return (int(match.group(1)) if match else 10**9, key)
+        
+    for row_key in sorted(rows_dict.keys(), key=_row_sort_key):
+        current[row_key] = rows_dict[row_key]
+        count += 1
+        if count >= rows_per_chunk:
+            end_row = start_row + count - 1
+            buckets.append({
+                "source_type": source_type, 
+                "sheet_name": sheet_name, 
+                "content": current,
+                "label": f"rows {start_row}-{end_row}"
+            })
+            start_row = end_row + 1
+            current = {}
+            count = 0
+            
+    if current:
+        end_row = start_row + count - 1
+        buckets.append({
+            "source_type": source_type, 
+            "sheet_name": sheet_name, 
+            "content": current,
+            "label": f"rows {start_row}-{end_row}"
+        })
+    return buckets
+
 # --- LLM JSON formatting utility ----------------------------------
 def format_chunk_for_llm_json(chunk: dict) -> str:
     """
@@ -1033,14 +1150,13 @@ def format_chunk_for_llm_json(chunk: dict) -> str:
                 else:
                     sanitized[k] = v
             return json_dumps_datetime(sanitized, separators=(",", ":"))
-        return json_dumps_datetime(content, separators=(",", ":"))
-
 # Main interface: loads and chunks an Excel/CSV file, optionally using block extraction and token budgeting.
 # Returns a list of numbered chunks.
 def get_excel_csv_chunks_advanced(
-    file_path: str,
-    hybrid_approach: bool = True,
+    file_path: Union[str, Path],
+    hybrid_approach: bool = False,
     max_tokens: int = 2500,
+    allow_raw_df: bool = True
 ) -> List[Dict[str, Any]]:
     """
     Hybrid sheet/block chunker.
@@ -1062,7 +1178,7 @@ def get_excel_csv_chunks_advanced(
             raise ValueError(f"Unsupported file type for: {file_path}")
             
         if not hybrid_approach:
-            chunks = _sheet_level_chunks(prepared_path)
+            chunks = _sheet_level_chunks(prepared_path, allow_raw_df=allow_raw_df)
             for ch in chunks:
                 src = ch.get("source_type")
                 sheet = ch.get("sheet_name") or "<csv>"
@@ -1071,7 +1187,7 @@ def get_excel_csv_chunks_advanced(
                     f"[CHUNKING] sheet '{sheet}': method=sheet-level (hybrid_approach=False; estimated={estimated}; max_tokens={max_tokens})"
                 )
         else:
-            sheet_chunks = _sheet_level_chunks(prepared_path)
+            sheet_chunks = _sheet_level_chunks(prepared_path, allow_raw_df=allow_raw_df)
             
             if is_csv:
                 # CSV behaves as a single sheet; if it exceeds max_tokens, split by row budget (no block-level).
@@ -1108,6 +1224,11 @@ def get_excel_csv_chunks_advanced(
                     if sheet_name is None:
                         continue
                     est_by_sheet[sheet_name] = estimated
+                    
+                    if sheet_name == "Raw":
+                        decision_by_sheet[sheet_name] = "demo-fixed-rows"
+                        continue
+
                     if estimated > max_tokens:
                         block_sheet_names.add(sheet_name)
                         decision_by_sheet[sheet_name] = "block-level"
@@ -1128,8 +1249,18 @@ def get_excel_csv_chunks_advanced(
                     
                 chunks = []
                 for ch in sheet_chunks:
+                    if "raw_df" in ch:
+                        chunks.append(ch)
+                        continue
+                    
                     sheet_name = ch.get("sheet_name")
-                    if sheet_name in block_sheet_names:
+                    decision = decision_by_sheet.get(sheet_name)
+                    
+                    if decision == "demo-fixed-rows":
+                        split_chunks = _split_rows_fixed_count(ch.get("content", {}), "excel", sheet_name, DEMO_CHUNK_ROWS)
+                        chunks.extend(split_chunks)
+                        print(f"[CHUNKING] sheet '{sheet_name}': method=demo-fixed-rows (estimated={est_by_sheet.get(sheet_name, 'n/a')}; max_tokens={max_tokens})", flush=True)
+                    elif sheet_name in block_sheet_names:
                         replacement = block_by_sheet.get(sheet_name)
                         if replacement:
                             chunks.extend(replacement)
@@ -1164,15 +1295,21 @@ def get_excel_csv_chunks_advanced(
         c["chunk_number"] = idx
         sheet = c.get("sheet_name") or "<csv>"
         estimated = _estimate_tokens(c.get("content", {}))
+        label = c.get("label", "")
         if c.get("source_type") == "csv":
             method = "sheet-level-split" if csv_chunk_count > 1 else "sheet-level"
         elif c.get("block_type"):
             method = "block-level"
+        elif label:
+            method = "demo-fixed-rows"
         else:
             method = "sheet-level"
-        print(
-            f"[CHUNKING] chunk {idx} (sheet '{sheet}'): method={method} (estimated={estimated}; max_tokens={max_tokens})"
-        )
+            
+        if label:
+            print(f"[CHUNKING] chunk {idx} {sheet} {label}", flush=True)
+        else:
+            print(f"[CHUNKING] chunk {idx} (sheet '{sheet}'): method={method} (estimated={estimated}; max_tokens={max_tokens})", flush=True)
+            
         result.append(c)
     return result
 

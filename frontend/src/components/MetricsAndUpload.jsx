@@ -4,13 +4,13 @@ import { executiveKPIs, executiveSummaryData, DEMO_MODE } from '../mockData';
 
 export function SummaryMetricCard({ icon: Icon, title, value, color }) {
   return (
-    <div className="glass-panel" style={{ padding: '16px', display: 'flex', alignItems: 'flex-start', gap: '12px', minWidth: '160px', flex: 1 }}>
-      <div style={{ padding: '10px', borderRadius: '10px', backgroundColor: `rgba(${color}, 0.1)`, color: `rgb(${color})` }}>
-        <Icon size={20} />
+    <div className="glass-panel glass-panel-hover" style={{ padding: '20px', display: 'flex', alignItems: 'flex-start', gap: '16px', minWidth: '180px', flex: 1 }}>
+      <div style={{ padding: '12px', borderRadius: '12px', backgroundColor: `rgba(${color}, 0.1)`, color: `rgb(${color})`, boxShadow: `0 0 20px rgba(${color}, 0.1)` }}>
+        <Icon size={24} />
       </div>
       <div>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '2px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{title}</p>
-        <h3 style={{ fontSize: '1.4rem' }}>{value}</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '4px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>{title}</p>
+        <h3 style={{ fontSize: '1.6rem', fontWeight: 800, letterSpacing: '-0.5px' }}>{value}</h3>
       </div>
     </div>
   );
@@ -68,7 +68,7 @@ export function TopMetrics({ isProcessing, isComplete, backendResult, fileStats 
   const scale = fileStats && fileStats.total > 0 ? (fileStats.total / 50) : 1;
 
   return (
-    <div style={{ display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap' }}>
+    <div className="top-metrics-container" style={{ display: 'flex', gap: '16px', alignItems: 'center', overflowX: 'auto', paddingBottom: '8px', WebkitOverflowScrolling: 'touch' }}>
       {executiveKPIs.map(kpi => {
         const Icon = LucideIcons[kpi.icon];
         let displayValue = "0";
@@ -111,13 +111,13 @@ export function TopMetrics({ isProcessing, isComplete, backendResult, fileStats 
         }
 
         return (
-          <div key={kpi.id} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{ color: `rgb(${kpi.color})` }}>
-              <Icon size={16} />
+          <div key={kpi.id} className="glass-panel" style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '12px', flex: '0 0 auto', minWidth: '180px' }}>
+            <div style={{ color: `rgb(${kpi.color})`, filter: `drop-shadow(0 0 6px rgba(${kpi.color}, 0.4))` }}>
+              <Icon size={20} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.5px' }}>{kpi.title}</span>
-              <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>{displayValue}</span>
+              <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.5px' }}>{kpi.title}</span>
+              <span style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-main)', letterSpacing: '-0.5px' }}>{displayValue}</span>
             </div>
           </div>
         );

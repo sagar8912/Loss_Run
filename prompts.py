@@ -141,6 +141,13 @@ IMPORTANT extraction instructions:
 - Only extract rows that represent individual, unique claims. Do NOT extract summary rows, totals, subtotals, headers, or any row that does not correspond to a real claim in the original file.
 - Do not infer or create claims that are not explicitly present in the input data.
 - If there are no claims, return an empty list.
+
+SPREADSHEET QUIRKS (CRITICAL):
+- Column headers in spreadsheets are sometimes completely wrong due to system exports. 
+- **Claimant Name**: If you see a column named "Cause of Loss Transformed" that contains names of people or companies (e.g., "Zebrowski, Peter", "Transportation, Best Care"), YOU MUST extract those names into the `claimant` field. 
+- **Policy Number**: If you see a column named "Nature of Injury Transformed" containing alphanumeric codes (e.g., "C153011494", "C553021301"), YOU MUST extract those into the `policy_number` field.
+- **Status**: If the status column contains "I" (Incident), map this to "C" (Closed), since incident-only reports are functionally closed.
+- **Financials**: The first several claims in a sheet are often incident-only reports with $0. If the spreadsheet columns explicitly show 0 for financials (Incurred, Paid, Expense), it is CORRECT to extract them as 0.0. Do NOT return null if the columns explicitly show 0.
 """
 
 

@@ -35,7 +35,7 @@ class ErrorBoundary extends React.Component {
 export const DEMO_MODE = false;
 
 function App() {
-  const { isProcessing, isComplete, agents, logs, startSimulation, restart } = useWorkflowSimulation();
+  const { isProcessing, isComplete, agents, logs, startSimulation, completeSimulation, failSimulation, restart } = useWorkflowSimulation();
   const [backendResult, setBackendResult] = useState(null);
   const [normalizedResult, setNormalizedResult] = useState(null);
   const [apiError, setApiError] = useState(null);
@@ -58,7 +58,10 @@ function App() {
     }
 
     try {
-      const response = await fetch('http://localhost:8000/api/process-loss-run', {
+      const API_URL = 'http://localhost:800/api/process-loss-run';
+      console.log("Calling API:", API_URL);
+      console.log("Selected files:", files);
+      const response = await fetch(API_URL, {
         method: 'POST',
         body: formData,
       });
@@ -67,15 +70,16 @@ function App() {
         throw new Error(errData?.detail || `Backend error: ${response.statusText}`);
       }
       const data = await response.json();
-      console.log("REAL BACKEND RESULT:", data);
+      console.log("Backend raw response:", data);
       const normResult = normalizeBackendResult(data, stats);
+      console.log("Normalized Result:", normResult);
       setBackendResult(data);
       setNormalizedResult(normResult);
-      console.log("Normalized Backend Result:", normResult);
+      completeSimulation(data);
     } catch (err) {
       console.error('API Error:', err);
       setApiError(`Failed to process files: ${err.message}`);
-      restart(); // Stop the mock simulation on error
+      failSimulation(err.message);
     }
   };
 
@@ -93,27 +97,31 @@ function App() {
     }
   };
 
+  const isFullComplete = isComplete && !!backendResult;
+
   let nextDisabled = false;
   if (currentIndex === tabs.length - 1) {
     nextDisabled = true;
-  } else if (currentIndex === 0 && !isProcessing && !isComplete) {
+  } else if (currentIndex === 0 && !isProcessing && !isFullComplete) {
     nextDisabled = true;
-  } else if (currentIndex >= 1 && !isComplete) {
+  } else if (currentIndex >= 1 && !isFullComplete) {
     nextDisabled = true;
   }
 
   return (
     <div className="app-container">
-      <Sidebar isProcessing={isProcessing} isComplete={isComplete} currentTab={currentTab} setCurrentTab={setCurrentTab} backendResult={normalizedResult} />
+      <Sidebar isProcessing={isProcessing} isComplete={isFullComplete} currentTab={currentTab} setCurrentTab={setCurrentTab} backendResult={normalizedResult} />
       <main className="main-content" style={{ padding: 0, gap: 0, height: '100vh', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '24px 40px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-card)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <div style={{ padding: '16px 40px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-card)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: currentTab === 'agent-workflow' ? 0 : '12px' }}>
             <h2 style={{ fontSize: '1.2rem', color: 'var(--text-main)', margin: 0 }}>
               <span style={{ color: 'var(--accent-color)', fontSize: '0.9rem', marginRight: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>Step {currentIndex + 1} of 6</span>
               {tabs[currentIndex].replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}
             </h2>
           </div>
-          <TopMetrics isProcessing={isProcessing} isComplete={isComplete} backendResult={normalizedResult} fileStats={fileStats} />
+          {currentTab !== 'agent-workflow' && (
+            <TopMetrics isProcessing={isProcessing} isComplete={isFullComplete} backendResult={normalizedResult} fileStats={fileStats} />
+          )}
         </div>
 
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}>
@@ -125,37 +133,37 @@ function App() {
           )}
 
           {currentTab === 'upload' && (
-            <div style={{ padding: '40px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '100%', animation: 'fadeIn 0.5s ease-out', overflow: 'hidden' }}>
+            <div style={{ padding: '40px', display: 'flex', flexDirection: 'column', flex: 1, animation: 'fadeIn 0.5s ease-out', overflowY: 'auto' }}>
               <FileUploadPanel startProcessing={handleStartProcessing} isProcessing={isProcessing} isComplete={isComplete} fileStats={fileStats} setFileStats={setFileStats} />
             </div>
           )}
 
           {currentTab === 'agent-workflow' && (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', animation: 'fadeIn 0.5s ease-out' }}>
-              <AgentWorkflowView agents={agents} logs={logs} />
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, animation: 'fadeIn 0.5s ease-out', overflow: 'hidden' }}>
+              <AgentWorkflowView agents={agents} logs={logs} fileStats={fileStats} />
             </div>
           )}
 
           {currentTab === 'transformation' && (
-            <div style={{ padding: '24px 40px', display: 'flex', flexDirection: 'column', height: '100%', animation: 'fadeIn 0.5s ease-out' }}>
+            <div style={{ padding: '24px 40px', display: 'flex', flexDirection: 'column', flex: 1, animation: 'fadeIn 0.5s ease-out', overflow: 'hidden' }}>
               <TransformationView backendResult={normalizedResult} />
             </div>
           )}
 
           {currentTab === 'validation' && (
-            <div style={{ padding: '24px 40px', display: 'flex', flexDirection: 'column', height: '100%', animation: 'fadeIn 0.5s ease-out' }}>
+            <div style={{ padding: '24px 40px', display: 'flex', flexDirection: 'column', flex: 1, animation: 'fadeIn 0.5s ease-out', overflow: 'hidden' }}>
               <ValidationView backendResult={normalizedResult} />
             </div>
           )}
 
           {currentTab === 'rollup' && (
-            <div style={{ padding: '24px 40px', display: 'flex', flexDirection: 'column', height: '100%', animation: 'fadeIn 0.5s ease-out' }}>
+            <div style={{ padding: '24px 40px', display: 'flex', flexDirection: 'column', flex: 1, animation: 'fadeIn 0.5s ease-out', overflow: 'hidden' }}>
               <RollupView backendResult={normalizedResult} />
             </div>
           )}
 
           {currentTab === 'final-output' && (
-            <div style={{ padding: '40px', display: 'flex', flexDirection: 'column', height: '100%', animation: 'fadeIn 0.5s ease-out', overflow: 'hidden' }}>
+            <div style={{ padding: '40px', display: 'flex', flexDirection: 'column', flex: 1, animation: 'fadeIn 0.5s ease-out', overflowY: 'auto' }}>
               <FinalOutputView backendResult={normalizedResult} />
             </div>
           )}

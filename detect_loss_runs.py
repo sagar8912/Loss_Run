@@ -3,7 +3,7 @@ import re
 import json
 import time
 import tiktoken
-from utils_excel_csv_to_json_advanced import get_excel_csv_chunks_advanced as get_excel_csv_chunks
+from utils_excel_csv_to_json_advanced import get_excel_csv_chunks_advanced
 from prompts import LOSS_RUN_DETECTION_PROMPT
 from utils_gpt import gpt_call
 import models
@@ -104,12 +104,15 @@ def _score_text_by_keywords(text: str) -> int:
         "claim id",
         "claim reference",
         "claim ref",
+        "file number",
+        "file #",
         "date of loss",
         "loss date",
         "reported date",
         "report date",
         "date reported",
         "status",
+        "claim status",
         "open date",
         "close date",
         "closed date",
@@ -134,18 +137,21 @@ def _score_text_by_keywords(text: str) -> int:
         "gross incurred",
         "incurred amount",
         "loss incurred",
+        "claim incurred",
         "total paid",
         "paid loss",
         "loss paid",
         "paid to date",
         "paid-to-date",
         "paid amount",
+        "claim paid",
         "outstanding reserve",
         "case reserve",
         "loss reserve",
         "outstanding loss",
         "remaining reserve",
         "reserve amount",
+        "claim future reserve",
         "total claim cost",
         "unpaid loss",
         "unpaid amount",
@@ -186,10 +192,12 @@ def _score_text_by_keywords(text: str) -> int:
     text = str(text)
     text_l = text.lower()
     score = 0
+    matched = []
     for kw in keywords:
         if kw in text_l:
             score += 1
-    return score
+            matched.append(kw)
+    return score, matched
 
 
 def _get_top_ocr_pages_for_detection(page_text_map: dict, top_n: int = 5):
@@ -203,7 +211,7 @@ def _get_top_ocr_pages_for_detection(page_text_map: dict, top_n: int = 5):
     # Score each page
     page_scores = []
     for page_str, text in page_text_map.items():
-        score = _score_text_by_keywords(text)
+        score, matched = _score_text_by_keywords(text)
         page_scores.append((page_str, text, score))
     
     # Any hits at all?
@@ -241,11 +249,25 @@ def _truncate_chunks_for_detection(chunks: list, max_words_per_sheet: int = 500)
         else:
             content_obj = ch.get("content")
             if isinstance(content_obj, dict):
-                # If this is a dict of rows -> dict of columns
-                row_dicts = [v for v in content_obj.values() if isinstance(v, dict)]
+                if content_obj.get("type") == "table" and "headers" in content_obj:
+                    for h in content_obj["headers"]:
+                        if isinstance(h, dict) and "text" in h:
+                            headers.append(str(h["text"]))
+                        elif isinstance(h, str):
+                            headers.append(h)
+                else:
+                    # If this is a dict of rows -> dict of columns
+                    row_dicts = [v for v in content_obj.values() if isinstance(v, dict)]
+                    header_set = set()
+                    for rd in row_dicts:
+                        header_set.update(str(k) for k in rd.keys())
+                    headers = sorted(header_set)
+            elif isinstance(content_obj, list) and len(content_obj) > 0:
+                # If this is a list of dicts (typical for excel/csv chunks)
                 header_set = set()
-                for rd in row_dicts:
-                    header_set.update(str(k) for k in rd.keys())
+                for rd in content_obj:
+                    if isinstance(rd, dict):
+                        header_set.update(str(k) for k in rd.keys())
                 headers = sorted(header_set)
         
         # Build truncated content string
@@ -256,6 +278,8 @@ def _truncate_chunks_for_detection(chunks: list, max_words_per_sheet: int = 500)
         truncated_content = " ".join(words)
         
         ch_copy = dict(ch)
+        if "raw_df" in ch_copy:
+            del ch_copy["raw_df"]
         ch_copy["content"] = truncated_content
         if headers:
             ch_copy["headers"] = headers
@@ -509,7 +533,7 @@ def detect_loss_runs(output_data_dir, company_folders):
                         # If file name doesn't hit, use the text from the excel/csv
                         try:
                             # Force sheet-level chunking to avoid empty block-level results
-                            chunks = get_excel_csv_chunks(file_path, hybrid_approach=False)
+                            chunks = get_excel_csv_chunks_advanced(file_path, hybrid_approach=True, max_tokens=2500, allow_raw_df=False)
                         except Exception as e:
                             print(f"        ❌ Failed to build chunks for {file_path}: {e}")
                             loss_run_detection_dict[dict_key] = {
@@ -540,7 +564,10 @@ def detect_loss_runs(output_data_dir, company_folders):
                         top_chunks = _truncate_chunks_for_detection(chunks)
                         # --- Always check headers and free text for keywords ---
                         keyword_score = 0
+                        all_matched_keywords = set()
+                        print(f"        [DEBUG] Detection for {file}:")
                         for ch in top_chunks:
+                            sheet_name = ch.get("sheet_name", "Unknown")
                             content = ch.get("content", "")
                             # Try to extract headers if present
                             headers = []
@@ -548,11 +575,22 @@ def detect_loss_runs(output_data_dir, company_folders):
                                 headers = ch["headers"]
                             elif isinstance(ch.get("content"), dict):
                                 headers = list(ch["content"].keys())
+                            elif isinstance(ch.get("content"), list) and len(ch["content"]) > 0 and isinstance(ch["content"][0], dict):
+                                headers = list(ch["content"][0].keys())
+                                
+                            print(f"          - Sheet: {sheet_name}")
+                            print(f"          - Columns found: {headers}")
+
                             # Compose a string with headers and content
                             header_str = " ".join(str(h) for h in headers)
                             combined_text = f"{header_str} {content}".strip()
-                            score = _score_text_by_keywords(combined_text)
+                            score, matched = _score_text_by_keywords(combined_text)
                             keyword_score += score
+                            all_matched_keywords.update(matched)
+                            
+                        print(f"          - Keywords matched: {list(all_matched_keywords)}")
+                        print(f"          - Final confidence score: {keyword_score}")
+                        
                         if keyword_score > 0:
                             loss_run_detection_dict[dict_key] = {
                                 "is_loss_run": True,

@@ -177,9 +177,10 @@ def pdf_to_images(pdf_path, output_dir, bar_height=160, dpi=450):
 
         # Open image and correct orientation if needed
         img = Image.open(image_path)
-        rotation_value = detect_rotation(image_path)
-        if rotation_value and rotation_value in [90, 180, 270]:
-            print(f"    GPT Vision Rotated: {pdf_path} page {i+1} by {rotation_value} degrees")
+        # Bypassing detect_rotation to avoid LLM calls before OCR/fallback
+        # rotation_value = detect_rotation(image_path)
+        # if rotation_value and rotation_value in [90, 180, 270]:
+        #     print(f"    GPT Vision Rotated: {pdf_path} page {i+1} by {rotation_value} degrees")
 
         # Re open with the updated image
         img = Image.open(image_path)

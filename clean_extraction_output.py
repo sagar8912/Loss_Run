@@ -70,20 +70,87 @@ def _clean_date_str(s: pd.Series) -> pd.Series:
             return pd.NA
     return s.apply(_parse)
 
-def _clean_lob(s: pd.Series) -> pd.Series:
-    allowed = {
-        "auto": "auto",
-        "property": "property",
-        "general liability": "general liability",
-        "workers compensation": "workers compensation",
-        "unknown": "unknown",
+def normalize_lob(row):
+    valid_lobs = {
+        "auto": "Auto",
+        "workers compensation": "Workers Compensation",
+        "general liability": "General Liability",
+        "property": "Property"
     }
-    def _norm(v):
-        if pd.isna(v):
-            return pd.NA
-        txt = str(v).strip().lower()
-        return allowed.get(txt, pd.NA)
-    return s.apply(_norm)
+    
+    # 1. Use explicit line_of_business/lob if valid and not unknown.
+    lob_candidates = []
+    if "lob" in row and pd.notna(row["lob"]):
+        lob_candidates.append(str(row["lob"]))
+    if "line_of_business" in row and pd.notna(row["line_of_business"]):
+        lob_candidates.append(str(row["line_of_business"]))
+        
+    for val in lob_candidates:
+        val_lower = val.lower().strip()
+        if val_lower in valid_lobs:
+            return valid_lobs[val_lower]
+            
+    # 2. Infer from Business Unit
+    bu_candidates = []
+    for col in row.index:
+        if col.lower() in ["business_unit", "business unit", "bu"]:
+            if pd.notna(row[col]):
+                bu_candidates.append(str(row[col]))
+        
+    for val in bu_candidates:
+        val_lower = val.lower()
+        if any(x in val_lower for x in ["workers compensation", "workers’ compensation", "work comp", "wc"]):
+            return "Workers Compensation"
+        if "auto" in val_lower:
+            return "Auto"
+        if "general liability" in val_lower or "gl" in val_lower.split():
+            return "General Liability"
+        if "property" in val_lower:
+            return "Property"
+
+    # 3. Infer from Coverage / Coverage Subtype / Policy Type / Line Type
+    cov_candidates = []
+    for col in row.index:
+        if col.lower() in ["coverage", "coverage_subtype", "policy_type", "line_type", "coverage type", "policy type"]:
+            if pd.notna(row[col]):
+                cov_candidates.append(str(row[col]))
+            
+    for val in cov_candidates:
+        val_lower = val.lower()
+        words = val_lower.split()
+        if "gl" in words or "general liability" in val_lower:
+            return "General Liability"
+        if any(x in val_lower for x in ["auto", "al", "vehicle", "truck", "trailer"]):
+            return "Auto"
+        if "property" in val_lower:
+            return "Property"
+        if "wc" in words or "workers compensation" in val_lower or "work comp" in val_lower:
+            return "Workers Compensation"
+            
+    # 4. Infer from claim_description / body_part / cause
+    desc_candidates = []
+    for col in row.index:
+        if col.lower() in ["claim_description", "body_part", "cause", "description", "loss description", "nature of injury", "part of body"]:
+            if pd.notna(row[col]):
+                desc_candidates.append(str(row[col]))
+            
+    for val in desc_candidates:
+        val_lower = val.lower()
+        if any(x in val_lower for x in ["vehicle", "truck", "trailer", "driver", "collision", "bumper", "tire"]):
+            return "Auto"
+        if any(x in val_lower for x in ["injury", "body part", "employee", "workplace", "strain", "fall", "bodily reaction", "material handling", "cut", "bruise", "fracture", "burn", "sprain", "dislocation"]):
+            return "Workers Compensation"
+        if any(x in val_lower for x in ["property", "building", "fire", "water", "wind"]):
+            return "Property"
+
+    # 4.5. Explicit fallback for Part of Body presence
+    for col in row.index:
+        if col.lower() == "part of body":
+            if pd.notna(row[col]) and str(row[col]).strip() != "":
+                return "Workers Compensation"
+
+    # 5. Fallback
+    return "Unknown"
 
 def _to_str_strip(s: pd.Series) -> pd.Series:
     return s.astype("string").str.strip()
@@ -184,12 +251,26 @@ def process_claims_df(claims_df: pd.DataFrame) -> pd.DataFrame:
             changed = _count_changes(before, df[col])
             _print_if_changes(changed, f"        Date cleaning: changed {changed} rows in '{col}'")
 
-    # --- line_of_business normalization ---
-    if "line_of_business" in df.columns:
-        before = df["line_of_business"].copy()
-        df["line_of_business"] = _clean_lob(df["line_of_business"]).astype("string")
-        changed = _count_changes(before, df["line_of_business"])
-        _print_if_changes(changed, f"        LOB cleaning: changed {changed} rows in 'line_of_business'")
+    # --- LOB Normalization ---
+    print(f"[LOB NORMALIZATION] Applying priority normalization...")
+    
+    lob_candidates_exist = any(col in df.columns for col in ["line_of_business", "lob"])
+    if lob_candidates_exist:
+        input_col = "lob" if "lob" in df.columns else "line_of_business"
+        unique_before = df[input_col].dropna().unique().tolist()
+        print(f"[LOB NORMALIZATION] Input unique values: {unique_before}")
+    else:
+        print(f"[LOB NORMALIZATION] Input unique values: [] (no explicit LOB column)")
+
+    df["lob"] = df.apply(normalize_lob, axis=1)
+    
+    unique_after = df["lob"].unique().tolist()
+    unknown_count = (df["lob"] == "Unknown").sum()
+    print(f"[LOB NORMALIZATION] Output unique values: {unique_after}")
+    print(f"[LOB NORMALIZATION] Unknown rows after normalization: {unknown_count}")
+    
+    if "line_of_business" in df.columns and "line_of_business" != "lob":
+        df.drop(columns=["line_of_business"], inplace=True)
 
     # --- prior_carrier as string ---
     if "prior_carrier" in df.columns:
@@ -231,8 +312,8 @@ def process_claims_df(claims_df: pd.DataFrame) -> pd.DataFrame:
         changed_strip = _count_changes(before_all.astype("string"), after_strip)
         _print_if_changes(changed_strip, f"        Subline cleaning (strip): changed {changed_strip} rows in 'subline'")
 
-        if "line_of_business" in df.columns:
-            is_auto = df["line_of_business"].eq("auto")
+        if "lob" in df.columns:
+            is_auto = df["lob"].eq("Auto")
 
             def _auto_subline(v):
                 if pd.isna(v):

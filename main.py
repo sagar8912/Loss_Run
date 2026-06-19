@@ -42,6 +42,7 @@ def prepare_excel_csv_files(input_data_dir, output_data_dir, company_names):
                     print(f"Copied CSV: {file} to output_data")
 
 def main():
+    print("MAIN STARTED", flush=True)
     reset_metrics()
     input_data_dir = "input_data"
     output_data_dir = "output_data"
@@ -52,46 +53,58 @@ def main():
     file_path_prefix = "sample_"
     
     # 1. Convert Word (.docx) documents to PDF
-    print("\nConverting DOCX to PDF....\n")
+    print("DOCX CONVERSION STARTED", flush=True)
     convert_docx_to_pdf(input_data_dir, company_names)
+    print("DOCX CONVERSION COMPLETED", flush=True)
     
     # 2. Copy raw Excel/CSV files to output folders
-    print("\nCopying Excel and CSV files to output_data....\n")
+    print("EXCEL COPY STARTED", flush=True)
     prepare_excel_csv_files(input_data_dir, output_data_dir, company_names)
+    print("EXCEL COPY COMPLETED", flush=True)
     
     # 3. Detect which documents are loss runs
-    print("\nDetecting which input files are loss runs....\n")
+    print("LOSS RUN DETECTION STARTED", flush=True)
     is_file_loss_run_dict = detect_loss_runs(output_data_dir, company_names)
+    print("LOSS RUN DETECTION COMPLETED", flush=True)
     
     # 4. Convert PDF pages to image sheets (handles rotation check)
-    print("\nCreating images of each PDF page...")
+    print("PDF TO IMAGE CONVERSION STARTED", flush=True)
     turn_pdf_to_images(company_names, input_data_dir, output_data_dir, is_file_loss_run_dict)
+    print("PDF TO IMAGE CONVERSION COMPLETED", flush=True)
+    
+    # 4.5 Image to Text OCR
+    print("OCR STARTED", flush=True)
+    from image_to_text import extract_text_from_images
+    extract_text_from_images(company_names, output_data_dir, is_file_loss_run_dict)
+    print("OCR COMPLETED", flush=True)
     
     # 5. Calculate page cutoff boundaries
-    print("\nDetermining PDF page groupings based on context limits...")
+    print("PAGE CUTOFF CALCULATION STARTED", flush=True)
     pages_to_join_dict = determine_page_cutoffs(output_data_dir, company_names, is_file_loss_run_dict)
+    print("PAGE CUTOFF CALCULATION COMPLETED", flush=True)
     
     # 6. Extract structured claims JSON
-    print("\nBeginning Loss Run Extraction....\n")
+    print("CLAIM EXTRACTION STARTED", flush=True)
     claims_df = extract_claims(output_data_dir, company_names, pages_to_join_dict, is_file_loss_run_dict)
+    print("CLAIM EXTRACTION COMPLETED", flush=True)
     
     # 7. Clean and normalize the output DataFrame
-    print("\n Cleaning Claims Dataframe and Implementing Logic")
+    print("CLEANING STARTED", flush=True)
     claims_df = process_claims_df(claims_df)
-    
-    # 8. Filter duplicate claims across files (optional)
-    # print("\n Detecting Claims Reported Across Multiple Files")
-    # claims_df = detect_duplicate_claims_across_files(claims_df)
+    print("CLEANING COMPLETED", flush=True)
     
     # 9. Save CSV output
+    print("OUTPUT GENERATION STARTED", flush=True)
     os.makedirs(extraction_data_dir, exist_ok=True)
+    
+    print(f"[CLEANING] Rows before CSV save: {len(claims_df)}", flush=True)
+
     claims_df.to_csv(f"{extraction_data_dir}/{file_path_prefix}claims.csv", index=False)
-    print(f"\nFinal claims CSV saved to: {extraction_data_dir}/{file_path_prefix}claims.csv")
     
     # 10. Save metrics JSON
     metrics_output_path = f"{extraction_data_dir}/{file_path_prefix}metrics.json"
     save_metrics_json(metrics_output_path)
-    print(f"Metrics saved to: {metrics_output_path}")
+    print("OUTPUT GENERATION COMPLETED", flush=True)
 
 if __name__ == "__main__":
     main()

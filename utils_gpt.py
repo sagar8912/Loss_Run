@@ -196,7 +196,7 @@ def _coerce_json_text(raw_output: str) -> str | None:
                     return normalized_candidate
     return None
 
-def groq_call(prompt, temperature=0):
+def groq_call(prompt, temperature=0, is_retry=False):
     api_key = os.getenv("GROQ_API_KEY")
     model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     if not api_key:
@@ -226,7 +226,25 @@ def groq_call(prompt, temperature=0):
         output_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
         return content, input_tokens, output_tokens
     except Exception as e:
-        print(f"[ERROR] Groq API call failed: {e}")
+        error_msg = str(e)
+        print(f"[ERROR] Groq API call failed: {error_msg}")
+        if "413" in error_msg:
+            return "ERROR_413_REQUEST_TOO_LARGE", 0, 0
+            
+        if "429" in error_msg:
+            if not is_retry:
+                match = re.search(r'Please try again in (\d+\.?\d*)s', error_msg)
+                if match:
+                    wait_time = float(match.group(1)) + 0.5
+                else:
+                    wait_time = 20.0
+                print(f"[RATE LIMIT] 429 Received. Waiting {wait_time:.1f}s before retrying once...", flush=True)
+                time.sleep(wait_time)
+                return groq_call(prompt, temperature=temperature, is_retry=True)
+            else:
+                print(f"[RATE LIMIT] 429 Received again after retry. Aborting this chunk.", flush=True)
+                return "ERROR_429_RATE_LIMIT", 0, 0
+                
         return None, 0, 0
 
 def gpt_call(
@@ -236,6 +254,9 @@ def gpt_call(
     temperature=0
 ):
     output, input_tokens, output_tokens = groq_call(prompt, temperature=temperature)
+    
+    if output in ("ERROR_413_REQUEST_TOO_LARGE", "ERROR_429_RATE_LIMIT"):
+        return output, input_tokens, output_tokens
     
     if not output:
         print("[ERROR] LLM output was empty or failed. Skipping this chunk.")

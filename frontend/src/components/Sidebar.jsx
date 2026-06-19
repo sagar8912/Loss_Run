@@ -28,11 +28,6 @@ export function Sidebar({ isProcessing, isComplete, currentTab, setCurrentTab, b
     completedSteps = 0;
   }
 
-  const totalBlocks = 12;
-  const filledBlocks = Math.round((progressPercent / 100) * totalBlocks);
-  const emptyBlocks = totalBlocks - filledBlocks;
-  const progressBar = '█'.repeat(filledBlocks) + '░'.repeat(emptyBlocks);
-
   return (
     <aside className="premium-sidebar">
       <div className="premium-sidebar-header">
@@ -46,7 +41,7 @@ export function Sidebar({ isProcessing, isComplete, currentTab, setCurrentTab, b
           <span style={{ color: '#fff' }}>{progressPercent}% Complete</span>
         </div>
         <div className="premium-progress-bar">
-          {progressBar}
+          <div className="premium-progress-fill" style={{ width: `${progressPercent}%` }} />
         </div>
         <div className="premium-progress-count">
           Completed: {completedSteps}/{navItems.length} Steps
@@ -121,21 +116,16 @@ export function Sidebar({ isProcessing, isComplete, currentTab, setCurrentTab, b
               onClick={() => setCurrentTab(item.id)}
             >
               {isViewing && <div className="active-indicator" />}
-              
               <div className="status-icon-wrapper">
-                {workflowStatus === 'completed' && <CheckCircle2 size={20} className="icon-completed" />}
-                {workflowStatus === 'processing' && <span className="icon-active" style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>➜</span>}
-                {workflowStatus === 'pending' && <Circle size={18} className="icon-pending" />}
+                <item.mainIcon size={20} className={`icon-${workflowStatus}`} />
               </div>
-              
               <div className="item-content">
-                <div className="item-label" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <item.mainIcon size={16} />
+                <span className="item-label" style={{ color: isViewing ? '#fff' : 'inherit' }}>
                   {item.label}
-                </div>
-                <div className={`item-status status-${statusClass}-text`}>
+                </span>
+                <span className={`item-status status-${workflowStatus}-text`}>
                   {statusText}
-                </div>
+                </span>
               </div>
             </button>
           );
