@@ -1,5 +1,121 @@
 import pandas as pd
 import re
+import json
+from utils_gpt import gpt_call
+import models
+
+USE_LLM_ROLLUP = True
+
+def generate_llm_roll_no_mapping(df: pd.DataFrame) -> list:
+    print("[ROLL_NO] LLM roll_no generation started")
+    
+    fields_to_include = [
+        "claim_id", "claimant", "driver_name", "insured_name", 
+        "loss_date", "report_date", "accident_state", "garage_state", 
+        "coverage_state", "policy_number", "lob", "line_of_business", 
+        "claim_description", "status", "source_file", "source_sheet", "source_page"
+    ]
+    
+    records_to_send = []
+    for idx, row in df.iterrows():
+        record = {"row_index": str(idx)}
+        for col in fields_to_include:
+            if col in df.columns and pd.notna(row[col]) and str(row[col]).strip() not in ["", "nan", "None", "NaT"]:
+                record[col] = str(row[col]).strip()
+        records_to_send.append(record)
+        
+    print(f"[ROLL_NO] Rows sent to LLM: {len(records_to_send)}")
+    json_input_str = json.dumps(records_to_send, indent=2)
+    
+    prompt = f"""You are an insurance data assistant. You are given a list of extracted claims.
+Your task is to identify which claims belong to the same customer/driver and represent the same accident/event, and group them together by assigning them the same unique roll_no identifier.
+
+CRITICAL RULES:
+1. Do NOT assume any fixed set of identifying fields. Instead, dynamically determine which attributes uniquely identify a group of claims representing the same customer/incident. This can include:
+   - Claimant or driver names (allow for spelling variations, typos, middle initials, name order)
+   - Dates (accident date)
+   - States (accident state, garage state, coverage state)
+   - Policy number suffixes (or entire policy numbers if they align)
+   - Specific details from descriptions or line of business
+2. If two or more rows represent the same customer/incident, they MUST be assigned the EXACT same roll_no. If a row represents a unique incident, assign it a unique roll_no.
+3. Construct the roll_no by combining the matched values/attributes to show the matching formula. Do NOT use generic IDs like ROLL_001. Instead, create a string showing the formula of fields you matched on.
+   - Example 1: "suman&2024-03-12&il"
+   - Example 2: "john_smith&pol_1234"
+   - Example 3: "jane_doe&house_fire"
+   - Make the roll_no strings completely lowercased, replacing spaces with underscores.
+4. You must map EVERY single row_index in the input.
+
+Response must be ONLY valid JSON dictionary:
+{{
+  "0": "suman&2024-03-12&il",
+  "1": "suman&2024-03-12&il",
+  "2": "john_smith&pol_1234"
+}}
+
+INPUT DATA:
+{json_input_str}
+"""
+    
+    mapping = {}
+    fallback_used = False
+    
+    if USE_LLM_ROLLUP:
+        try:
+            model_name = models.GPT_5_2["model_name"]
+            api_version = models.GPT_5_2["api_version"]
+            
+            content, in_tokens, out_tokens = gpt_call(
+                prompt=prompt,
+                model_name=model_name,
+                api_version=api_version,
+                temperature=0
+            )
+            
+            if content:
+                try:
+                    mapping = json.loads(content)
+                except Exception:
+                    fallback_used = True
+            else:
+                fallback_used = True
+        except Exception as e:
+            print(f"[ROLL_NO] Exception during LLM generation: {e}")
+            fallback_used = True
+    else:
+        fallback_used = True
+
+    print(f"[ROLL_NO] Mapping received: {len(mapping)}")
+    missing_count = sum(1 for idx in df.index if str(idx) not in mapping)
+    print(f"[ROLL_NO] Missing row indexes: {missing_count}")
+    
+    if missing_count > 0:
+        fallback_used = True
+        
+    print(f"[ROLL_NO] Fallback used: {str(fallback_used).lower()}")
+    
+    roll_numbers = []
+    for idx, row in df.iterrows():
+        idx_str = str(idx)
+        if idx_str in mapping and not fallback_used:
+            roll_numbers.append(mapping[idx_str])
+        else:
+            cid = row.get("claim_id", "")
+            cid_str = str(cid).strip() if pd.notna(cid) else ""
+            if cid_str and cid_str not in ["nan", "None", ""]:
+                roll_no = f"claim_{cid_str.lower()}"
+            else:
+                claimant = str(row.get("claimant", "")).strip() if pd.notna(row.get("claimant")) else "unknown"
+                loss_date = str(row.get("loss_date", "")).strip() if pd.notna(row.get("loss_date")) else "unknown"
+                state = str(row.get("accident_state", "")).strip() if pd.notna(row.get("accident_state")) else "unknown"
+                
+                if claimant != "unknown" or loss_date != "unknown" or state != "unknown":
+                    roll_no = f"{claimant}&{loss_date}&{state}".lower().replace(" ", "_")
+                else:
+                    source = str(row.get("source_file", row.get("file_path", "unknown"))).strip() if pd.notna(row.get("file_path")) else "unknown"
+                    roll_no = f"{source}&row_{idx}".lower().replace(" ", "_")
+            roll_numbers.append(roll_no)
+            
+    return roll_numbers
 
 def parse_financial(val):
     if pd.isna(val):
@@ -53,6 +169,79 @@ def generate_analytics_payload(df: pd.DataFrame, files_processed: int, total_tim
                 "sources": [str(s) for s in sources],
                 "selected_row_index": int(selected_idx)
             })
+
+    # 1. Assign rollup_number per unique claim_id
+    df["rollup_number"] = ""
+    rollup_counter = 1
+    claim_id_to_rollup = {}
+    
+    for idx, row in df.iterrows():
+        cid = str(row.get(cid_col, "")).strip()
+        if cid and cid not in ["nan", "None", ""]:
+            if cid not in claim_id_to_rollup:
+                claim_id_to_rollup[cid] = f"ROLLUP-{rollup_counter:03d}"
+                rollup_counter += 1
+            df.at[idx, "rollup_number"] = claim_id_to_rollup[cid]
+        else:
+            df.at[idx, "rollup_number"] = f"ROLLUP-{rollup_counter:03d}"
+            rollup_counter += 1
+
+    df["roll_no"] = generate_llm_roll_no_mapping(df)
+
+    # 2. Build claim-level rollup list
+    claim_rollup_list = []
+    for rnum, group_df in df.groupby("rollup_number"):
+        primary_rows = group_df[group_df.get("selected_for_rollup", True) == True]
+        primary_row = primary_rows.iloc[0] if not primary_rows.empty else group_df.iloc[0]
+        
+        cids = group_df.get(cid_col, pd.Series()).dropna().astype(str).str.strip().unique().tolist()
+        cids = [c for c in cids if c not in ["nan", "None", ""]]
+        claim_ids_str = ", ".join(cids) if cids else "Unknown"
+        
+        roll_nos = group_df["roll_no"].dropna().unique().tolist() if "roll_no" in group_df.columns else []
+        roll_nos_str = ", ".join(roll_nos) if roll_nos else "Unknown"
+        
+        lob = str(primary_row.get("lob", "Unknown")).strip()
+        if lob.lower() in ["nan", "none", ""]: lob = "Unknown"
+            
+        lob_full = str(primary_row.get("line_of_business", lob)).strip()
+        if lob_full.lower() in ["nan", "none", ""]: lob_full = lob
+            
+        claim_count = len(group_df)
+        
+        paid = parse_financial(primary_row.get("total_paid", primary_row.get("paid", 0)))
+        reserve = parse_financial(primary_row.get("total_reserve", primary_row.get("reserve", 0)))
+        incurred = parse_financial(primary_row.get("total_incurred", primary_row.get("incurred", 0)))
+        
+        dup_flag = claim_count > 1
+        
+        if "file_path" in group_df.columns:
+            sources = group_df["file_path"].dropna().astype(str).unique().tolist()
+        else:
+            sources = []
+        source_files = ", ".join(sources)
+        
+        claim_rollup_list.append({
+            "roll_no": roll_nos_str,
+            "rollup_number": rnum,
+            "claim_ids": claim_ids_str,
+            "lob": lob,
+            "line_of_business": lob_full,
+            "claim_count": claim_count,
+            "total_paid": paid,
+            "total_reserve": reserve,
+            "total_incurred": incurred,
+            "source_files": source_files,
+            "duplicate_flag": dup_flag,
+            "selected_for_rollup": True
+        })
+
+    print(f"[ROLLUP] Rollup level: claim_id")
+    print(f"[ROLLUP] Unique claim_ids: {len(claim_id_to_rollup)}")
+    print(f"[ROLLUP] Rollup groups created: {len(claim_rollup_list)}")
+    if claim_rollup_list:
+        sample_size = min(3, len(claim_rollup_list))
+        print(f"[ROLLUP] Sample rollup_numbers: {[r['rollup_number'] for r in claim_rollup_list[:sample_size]]}")
 
     # Basic info
     raw_rows = df.to_dict(orient="records")
@@ -201,7 +390,8 @@ def generate_analytics_payload(df: pd.DataFrame, files_processed: int, total_tim
         "validationChecks": validation_checks,
         "rollupSummary": {
             "lobSummary": lob_summary,
-            "yearWiseSummary": year_summary
+            "yearWiseSummary": year_summary,
+            "claimLevelRollup": claim_rollup_list
         },
         "duplicateSummary": dup_summary,
         "finalClaimsUsedForRollup": int(df["selected_for_rollup"].sum()) if "selected_for_rollup" in df.columns else claims_extracted,
@@ -225,12 +415,16 @@ def generate_excel_report(df: pd.DataFrame, payload: dict, metrics: dict, output
                 raw_df[col] = pd.to_datetime(raw_df[col], errors='coerce').dt.strftime('%Y-%m-%d')
         raw_df.to_excel(writer, sheet_name="RAW", index=False)
         
-        # 2. ROLLEDUP
-        lob_data = payload.get("rollupSummary", {}).get("lobSummary", [])
-        if lob_data:
-            pd.DataFrame(lob_data).to_excel(writer, sheet_name="ROLLEDUP", index=False)
+        # 2. ROLLEDUP (Claim-level + LLM Roll No)
+        claim_rollup_data = payload.get("rollupSummary", {}).get("claimLevelRollup", [])
+        if claim_rollup_data:
+            pd.DataFrame(claim_rollup_data).to_excel(writer, sheet_name="ROLLEDUP", index=False)
         else:
-            pd.DataFrame(columns=["lob", "count", "paid", "reserve", "incurred"]).to_excel(writer, sheet_name="ROLLEDUP", index=False)
+            pd.DataFrame(columns=[
+                "roll_no", "rollup_number", "claim_ids", "lob", "line_of_business", 
+                "claim_count", "total_paid", "total_reserve", 
+                "total_incurred", "source_files", "duplicate_flag", "selected_for_rollup"
+            ]).to_excel(writer, sheet_name="ROLLEDUP", index=False)
             
         # 3. PIVOT
         year_data = payload.get("rollupSummary", {}).get("yearWiseSummary", [])
